@@ -30,6 +30,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from scripts.sf_connect import get_conn
 from scripts.retrieve import Retriever
+from app.chat_agent import get_agent
 
 # ──────────────────── Config ────────────────────
 DB = os.getenv("SNOWFLAKE_DATABASE", "INSTRUCTOR2_DB")
@@ -143,13 +144,14 @@ with st.sidebar:
 # TAB 1: DATA EXPLORER  |  TAB 2: ANALYTICS  |  TAB 3: UPDATE RECORDS  |  TAB 4: LOGS
 # ══════════════════════════════════════════════════════════════
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📋 Data Explorer",
     "📊 Analytics",
     "✏️ Update Records",
     "📝 Logs (Local)",
     "🏗 Warehouse Status",
-    "🧠 Financial RAG"
+    "🧠 Financial RAG",
+    "🤖 Agent Chat"
 ])
 
 # ────────────────── TAB 1: DATA EXPLORER ──────────────────
@@ -425,3 +427,32 @@ with tab6:
         except Exception as e:
             st.error(f"Retrieval error: {e}")
 
+# ────────────────── TAB 7: AGENT CHAT ──────────────────
+with tab7:
+    st.subheader("Interactive AI Agent Interface")
+    st.write("Ask complex queries. The agent will decide whether to write SQL or query the FAISS document retrieve.")
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+        
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            
+    if prompt := st.chat_input("E.g., What was the total revenue in France, and were there any news about tech stocks?"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+            
+        with st.chat_message("assistant"):
+            with st.spinner("Agent is reasoning and fetching data..."):
+                try:
+                    agent = get_agent()
+                    # Convert chat history formats for LangGraph State
+                    inputs = {"messages": st.session_state.messages}
+                    result = agent.invoke(inputs)
+                    response = result["messages"][-1].content
+                    st.markdown(response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                except Exception as e:
+                    st.error(f"Agent Execution Error: {str(e)}")
