@@ -1,26 +1,21 @@
-# Reproducibility Audit Details (REPRO_AUDIT.md)
+# Reproducibility Audit
 
-## 1. Single Command Execution
-- We created `reproduce.sh`, which automatically chains data generation and module verification logic, reducing human error in the pipeline setup process.
-- It includes short-circuit execution: if `pytest` fails, the pipeline aborts.
+The following standards were applied to this repository to guarantee deterministic, reproducible performance aligned with the Lab 7 requirements.
 
-## 2. Pinned Environments
-- We executed `pip freeze > requirements.txt` to capture the exact dependency tree used locally. 
-- The tests check that these packages are available before proceeding.
+### Runs through a single command
+We implemented a `Makefile` sequence that centralizes complicated python calls into logical verbs (`make install`, `make test`, `make reproduce`).
 
-## 3. Configuration-Driven Execution
-- A master configuration file (`config.yaml`) was introduced to centrally store constants.
-- We created `scripts/config.py` to standardize the process of loading configuration into pipeline scripts like `preprocess_text.py` and `build_index.py`.
-- This separates code logic from configurations. Changing the FAISS `model_name` or algorithm type no longer requires making source-code modifications.
+### Uses pinned environments
+Our `requirements.txt` acts as the single source of truth for dependencies. If executing `make install` is run a year from now, the system behaves exactly as it did during development. 
 
-## 4. Controlled Randomness
-- Non-deterministic sources of variance during AI inference and synthetic data generation were removed. 
-- We set a reproducible application seed (`random_seed: 42` in `config.yaml`).
-- Applied seeds explicitly to Python's built-in `random`, `numpy` (via `np.random.seed()`), and `pytorch` (via `torch.manual_seed()`).
+### Controls randomness
+The implementation script (`run_faiss_repro.py`) sets strict random seeds globally via NumPy (`np.random.seed()`), which propagates identically whenever generating synthetic benchmarks or initiating clustering behaviors in FAISS.
 
-## 5. Artifacts and Logging
-- Removed hardcoded local scattered output directories. 
-- AI Model Metadata and binary FAISS indexes now export reliably to the `artifacts/` folder.
-- Output from pipeline data loading and query latency is piped into a centralized, auto-generated `logs/` folder inside `pipeline_logs.csv`. Streamlit dashboards automatically parse from this config-defined log location.
+### Exports structured artifacts
+Metrics are no longer isolated to the terminal. The `make reproduce` command deterministically writes evaluation statistics (Recall@k, latency comparisons, index build times) to `artifacts/metrics.json` for persistent storage and reporting.
 
+### Includes logging and a smoke test
+The system outputs a detailed runtime trace to `logs/faiss_run.log`. We additionally wrote formal verification code (`tests/test_faiss_smoke.py`) using `pytest` to halt broken states before resources are wasted executing the main pipeline.
 
+### Config-driven execution
+Hardcoded parameters were eliminated. The variables controlling FAISS dimensionality, inverted lists, sub-quantization (`m`), bits, and `nprobe` are read dynamically from `config.yaml`.

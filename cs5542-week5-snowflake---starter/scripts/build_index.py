@@ -3,10 +3,8 @@ import pickle
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 import numpy as np
-import random
-import torch
-import os
-from scripts.config import config
+import yaml
+MODEL_NAME = "all-MiniLM-L6-v2"
 
 def build_index():
     # Set explicit seeds for reproducibility
@@ -32,21 +30,16 @@ def build_index():
     embeddings = np.array(embeddings).astype("float32")
     dimension = embeddings.shape[1]
     
-    index_type = config["indexing"].get("index_type", "IndexFlatL2")
+    with open("config.yaml", "r") as f:
+        config = yaml.safe_load(f)["faiss"]
+
+    print(f"Building IVFPQ Index (nlist={config['nlist']}, m={config['m']}, nbits={config['nbits']})...")
+    quantizer = faiss.IndexFlatL2(dimension)
+    index = faiss.IndexIVFPQ(quantizer, dimension, config["nlist"], config["m"], config["nbits"])
     
-    if index_type == "IndexIVFFlat":
-        # Integrating efficient index from Faiss reproducibility lessons
-        nlist = config["indexing"].get("nlist", 100)
-        # We need a quantizer for IVFFlat
-        quantizer = faiss.IndexFlatL2(dimension)
-        index = faiss.IndexIVFFlat(quantizer, dimension, nlist, faiss.METRIC_L2)
-        # Train before adding
-        index.train(embeddings)
-        index.add(embeddings)
-    else:
-        # Default exact nearest neighbor
-        index = faiss.IndexFlatL2(dimension)
-        index.add(embeddings)
+    print("Training the index on existing data...")
+    index.train(embeddings)
+    index.add(embeddings)
 
     out_index_path = config["indexing"]["output_index"]
     out_meta_path = config["indexing"]["output_metadata"]

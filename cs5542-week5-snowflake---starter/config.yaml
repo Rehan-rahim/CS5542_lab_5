@@ -1,27 +1,7 @@
-# Lab 5 Configuration File
-
-# Project seed for reproducibility
-random_seed: 42
-
-# Data preprocessing settings
-preprocessing:
-  chunk_size: 512
-  overlap: 50
-  input_files:
-    - data/online_retail_II.csv
-    - data/olist_orders_dataset.csv
-  output_file: artifacts/processed_text.csv
-
-# Vector indexing settings
-indexing:
-  model_name: all-MiniLM-L6-v2
-  index_type: IndexIVFFlat  # Options: IndexFlatL2, IndexIVFFlat
-  nlist: 100  # Number of Voronoi cells for IVFFlat
-  input_file: artifacts/processed_text.csv
-  output_index: artifacts/index.faiss
-  output_metadata: artifacts/metadata.pkl
-
-# Logging settings
-logging:
-  log_dir: logs
-  pipeline_log_file: logs/pipeline_logs.csv
+faiss:
+  dimension: 384             # Matches the dimensionality of all-MiniLM-L6-v2
+  nlist: 10                  # Number of coarse quantizer centroids (clusters)
+  m: 8                       # Number of sub-quantizers for PQ
+  nbits: 8                   # Number of bits for each sub-quantizer
+  seed: 42                   # Random seed for deterministic reproducibility
+  nprobe: 2                  # Number of clusters to visit during search

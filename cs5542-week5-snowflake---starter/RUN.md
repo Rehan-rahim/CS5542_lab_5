@@ -1,26 +1,32 @@
-# Lab 5: Reproducibility Run Guide
+# Run Instructions
 
-## Single Command Execution
+This repository has been designed for deterministic, one-command reproducibility.
 
-To execute the entire reproducible pipeline (Part A & Part B), simply run:
+### Prerequisites
+- Python 3.10+
+- `pip` or `conda`
 
+### 1. Re-create the Environment
+All dependencies are strictly declared.
 ```bash
-bash reproduce.sh
+make install
 ```
 
-### What `reproduce.sh` does:
-1. **Creates Required Directories:** Generates `artifacts/` and `logs/` folders if they do not exist.
-2. **Smoke Tests:** Runs a suite of `pytest` assertions located in `tests/test_smoke.py` to ensure the environment matches the pinned configuration and that configurations load successfully.
-3. **Data Preprocessing:** Runs `scripts/preprocess_text.py`, seeding randomness from `config.yaml` and writing parsed textual dataset chunks to `artifacts/processed_text.csv`.
-4. **Index Building:** Runs `scripts/build_index.py`, taking configurations from `config.yaml` (including the exact random seed, AI model name, and Index type—which defaults to the faster `IndexIVFFlat`) to build a vector database and save it to `artifacts/index.faiss`.
-5. **Faiss Reproducibility Benchmark:** Runs `faiss_benchmark_repro.py` to print a live terminal comparison of Faiss exact vs approximate search speeds and recall metrics.
-
----
-
-### Dashboard
-
-After running the pipeline, launch the main web application to interact with your data:
-
+### 2. Verify System State (Smoke Test)
+Before running extensive tasks, prove the FAISS libraries and configs are valid:
 ```bash
-streamlit run app/streamlit_app.py
+make test
 ```
+
+### 3. Run the FAISS Reproducibility Target
+Execute the fully automated, config-driven benchmark. This will generate the dataset, train two indexes (L2 vs IVFPQ), evaluate them, and save outputs.
+```bash
+make reproduce
+```
+
+### Outputs Generated
+- **`logs/faiss_run.log`**: Detailed timestamps and debug traces.
+- **`artifacts/metrics.json`**: Structured report containing recall, speedups, and dimensions.
+
+### Editing Hyperparameters
+You can tweak the FAISS parameters (such as clusters, probes, bits, or seed) without changing any python scripts by editing the `config.yaml` file natively.
