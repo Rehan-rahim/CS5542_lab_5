@@ -2,8 +2,12 @@ import re
 import pandas as pd
 from datasets import load_dataset
 import os
+import random
+import numpy as np
+from scripts.config import config
 
-
+random.seed(config["random_seed"])
+np.random.seed(config["random_seed"])
 def clean_text(text: str) -> str:
     text = text.lower()
     text = re.sub(r"http\S+", "", text)
@@ -108,8 +112,9 @@ def build_chunks():
                 "source": "olist_orders"
             })
     
-
-    pd.DataFrame(all_chunks).to_csv("retrieval/processed_text.csv", index=False)
+    out_path = config["preprocessing"]["output_file"]
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    pd.DataFrame(all_chunks).to_csv(out_path, index=False)
     print(f"Total chunks created: {len(all_chunks)}")
 
 if __name__ == "__main__":

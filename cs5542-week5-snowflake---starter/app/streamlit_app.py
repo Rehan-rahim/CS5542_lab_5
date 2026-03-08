@@ -32,10 +32,12 @@ from scripts.sf_connect import get_conn
 from scripts.retrieve import Retriever
 from app.chat_agent import get_agent
 
+from scripts.config import config
+
 # ──────────────────── Config ────────────────────
 DB = os.getenv("SNOWFLAKE_DATABASE", "INSTRUCTOR2_DB")
 SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "MY_SCHEMA")
-LOG_PATH = "logs/pipeline_logs.csv"
+LOG_PATH = config.get("logging", {}).get("pipeline_log_file", "logs/pipeline_logs.csv")
 TABLES = ["EVENTS", "USERS", "ONLINE_RETAIL", "OLIST_ORDERS"]
 
 # ──────────────────── Helpers ────────────────────
