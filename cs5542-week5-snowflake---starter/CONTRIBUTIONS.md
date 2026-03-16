@@ -12,7 +12,12 @@
   - added warehouse status check
   - implemented ai agent
   - implemented ai ui 
+  - Prompt Adaptation Pipeline
+  - Application Integration 
+  - System Debugging & Tool Stabilization
+
 - Evidence (PR/commits):
+  - https://github.com/salnigro/CS5542_lab_5/commit/bc08dcdfb419a8e8f570a6c90632dec79f1f9505
   - https://github.com/salnigro/CS5542_lab_5/commit/4f2708ac95f2bb7072c7bf428eff00b869e4428c
   - https://github.com/salnigro/CS5542_lab_5/commit/2a3436059671290f3fbadbdb78687ec12a5efeb6
   - https://github.com/salnigro/CS5542_lab_5/commit/f33eff4f63c97afcd7c45932980a0e0ae651a997
