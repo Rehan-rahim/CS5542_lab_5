@@ -2,6 +2,9 @@ import os
 import sys
 import pandas as pd
 from typing import Dict, Any, List
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Add parent directory for module resolution if needed
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -23,14 +26,18 @@ def search_financial_news(query: str) -> str:
         str: A concatenated string of the top semantically retrieved text chunks containing the context.
     """
     try:
+        logger.info(f"Tool call: search_financial_news(query='{query}')")
         retriever = Retriever()
         results = retriever.search(query, k=3)
         if not results:
+            logger.info("No results found.")
             return f"No relevant information found for: {query}"
         
         context = "\n---\n".join([f"Source: {r['source']}\nContent: {r['text']}" for r in results])
+        logger.info(f"Retrieved {len(results)} chunks.")
         return f"Semantic Search Results:\n{context}"
     except Exception as e:
+        logger.error(f"search_financial_news error: {e}", exc_info=True)
         return f"Error executing FAISS search: {str(e)}"
 
 @tool
@@ -52,7 +59,9 @@ def query_snowflake(sql_query: str) -> str:
         str: Markdown formatted table of the query results, or an error message if the query fails.
     """
     try:
+        logger.info(f"Tool call: query_snowflake(sql_query='{sql_query}')")
         if not sql_query.strip().upper().startswith("SELECT"):
+            logger.warning("Agent attempted non-SELECT query.")
             return "Error: Only SELECT queries are permitted for safety."
 
         from app.streamlit_app import get_cached_conn
@@ -60,12 +69,16 @@ def query_snowflake(sql_query: str) -> str:
         df = pd.read_sql(sql_query, conn)
         
         if df.empty:
+            logger.info("Query returned 0 rows.")
             return "Query executed successfully, but returned 0 rows."
         
         # Format dataframe as markdown table string to return to LLM
-        return df.to_markdown(index=False)
+        res = df.to_markdown(index=False)
+        logger.info(f"Query successful, returned {len(df)} rows.")
+        return res
             
     except Exception as e:
+        logger.error(f"query_snowflake error: {e}", exc_info=True)
         return f"Database Error executing query '{sql_query}': {str(e)}"
 
 @tool
@@ -82,6 +95,7 @@ def calculate_metrics(values: List[float], operation: str) -> str:
         str: The calculated result.
     """
     try:
+        logger.info(f"Tool call: calculate_metrics(values={values[:5]}..., operation='{operation}')")
         if not values:
             return "Error: List of values is empty."
         
@@ -97,6 +111,8 @@ def calculate_metrics(values: List[float], operation: str) -> str:
         else:
             return f"Error: Unsupported operation '{operation}'"
         
+        logger.info(f"Calculation successful: {res}")
         return f"The {operation} of the provided values is {res:.2f}"
     except Exception as e:
+        logger.error(f"calculate_metrics error: {e}", exc_info=True)
         return f"Error calculating metrics: {str(e)}"

@@ -1,9 +1,12 @@
 import os
+import logging
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
 from .tools import query_snowflake, search_financial_news, calculate_metrics
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -14,6 +17,7 @@ def get_agent(adapted=False):
     If adapted=True, applies Domain Adaptation via specialized prompt instructions.
     """
     # Requires GOOGLE_API_KEY set in .env
+    logger.info(f"Initializing agent with adapted={adapted}")
     llm = ChatGoogleGenerativeAI(
         model = "gemini-2.5-pro",
         request_timeout=120

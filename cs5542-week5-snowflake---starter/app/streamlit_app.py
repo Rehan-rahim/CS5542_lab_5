@@ -24,6 +24,9 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 from datetime import datetime
+import logging
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import SystemMessage, HumanMessage
 
 # Ensure the project root is on the path so `scripts.sf_connect` can be imported
 # regardless of where Streamlit is launched from.
@@ -37,6 +40,18 @@ DB = os.getenv("SNOWFLAKE_DATABASE", "INSTRUCTOR2_DB")
 SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "MY_SCHEMA")
 LOG_PATH = "logs/pipeline_logs.csv"
 TABLES = ["EVENTS", "USERS", "ONLINE_RETAIL", "OLIST_ORDERS"]
+
+# ──────────────────── Logging Setup ────────────────────
+os.makedirs("logs", exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+    handlers=[
+        logging.FileHandler("logs/debug.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # ──────────────────── Helpers ────────────────────
 
@@ -95,30 +110,63 @@ def run_query(sql: str):
     t0 = time.time()
     conn = get_cached_conn()
     try:
+        logger.info(f"Executing query: {sql[:100]}...")
         df = pd.read_sql(sql, conn)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Query failed, reconnecting. Error: {e}")
         st.cache_resource.clear()
         conn = get_cached_conn()
-        df = pd.read_sql(sql, conn)
-    return df, int((time.time() - t0) * 1000)
+        try:
+            df = pd.read_sql(sql, conn)
+        except Exception as retry_e:
+            logger.error(f"Retry query failed: {retry_e}", exc_info=True)
+            raise retry_e
+    
+    latency = int((time.time() - t0) * 1000)
+    logger.info(f"Query completed in {latency} ms with {len(df)} rows.")
+    return df, latency
+
+@st.cache_data(ttl=600, show_spinner=False)
+def run_query_cached(sql: str):
+    """Cached version of run_query for read-only analytics."""
+    logger.info(f"Cache miss for query, querying DB...")
+    # st.cache_data requires return values to be serializable, so we only cache the dataframe
+    # Latency will be recorded as 0 when hitting cache
+    t0 = time.time()
+    conn = get_conn() # Do not use the cached connection resource inside a cache_data, instead get a new or separate connection or rely on sf_connect
+    try:
+         df = pd.read_sql(sql, conn)
+    except Exception as e:
+         logger.error(f"Cached query failed: {e}", exc_info=True)
+         raise e
+    latency = int((time.time() - t0) * 1000)
+    return df, latency
 
 def run_write(sql: str):
     """Execute a write SQL statement (UPDATE/INSERT/DELETE). Returns rows affected."""
     conn = get_cached_conn()
     try:
+        logger.info(f"Executing write: {sql[:100]}...")
         cur = conn.cursor()
         cur.execute(sql)
         affected = cur.rowcount
         cur.close()
+        logger.info(f"Write successful. {affected} rows affected.")
         return affected
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Write failed, reconnecting. Error: {e}")
         st.cache_resource.clear()
         conn = get_cached_conn()
         cur = conn.cursor()
-        cur.execute(sql)
-        affected = cur.rowcount
-        cur.close()
-        return affected
+        try:
+            cur.execute(sql)
+            affected = cur.rowcount
+            cur.close()
+            logger.info(f"Retry write successful. {affected} rows affected.")
+            return affected
+        except Exception as retry_e:
+            logger.error(f"Retry write failed: {retry_e}", exc_info=True)
+            raise retry_e
 
 def fqn(table: str) -> str:
     """Return fully qualified table name: DB.SCHEMA.TABLE"""
@@ -144,7 +192,7 @@ with st.sidebar:
 # TAB 1: DATA EXPLORER  |  TAB 2: ANALYTICS  |  TAB 3: UPDATE RECORDS  |  TAB 4: LOGS
 # ══════════════════════════════════════════════════════════════
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "📋 Data Explorer",
     "📊 Analytics",
     "✏️ Update Records",
@@ -152,7 +200,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🏗 Warehouse Status",
     "🧠 Financial RAG",
     "🤖 Agent Chat",
-    "⚖️ Domain Eval"
+    "⚖️ Domain Eval",
+    "📈 App Metrics"
 ])
 
 # ────────────────── TAB 1: DATA EXPLORER ──────────────────
@@ -163,8 +212,9 @@ with tab1:
     if st.button("🔍 Load Data", key="load_data"):
         sql = f"SELECT * FROM {fqn(selected_table)} LIMIT 500;"
         try:
-            df, latency_ms = run_query(sql)
-            st.caption(f"✅ {len(df)} rows loaded in {latency_ms} ms")
+            # Use cached queries for explorer to avoid repeated loads
+            df, latency_ms = run_query_cached(sql)
+            st.caption(f"✅ {len(df)} rows loaded in ~{latency_ms} ms (cacheable)")
 
             # Scrollable dataframe with height control
             st.dataframe(df, use_container_width=True, height=400)
@@ -172,11 +222,12 @@ with tab1:
             # Show schema information
             with st.expander("📐 Table Schema"):
                 schema_sql = f"DESCRIBE TABLE {fqn(selected_table)};"
-                schema_df, _ = run_query(schema_sql)
+                schema_df, _ = run_query_cached(schema_sql)
                 st.dataframe(schema_df, use_container_width=True)
 
             log_event(team, user, f"SELECT * FROM {selected_table}", latency_ms, len(df))
         except Exception as e:
+            logger.error(f"Error loading data for {selected_table}: {e}", exc_info=True)
             st.error(f"Error: {e}")
             log_event(team, user, f"SELECT * FROM {selected_table}", 0, 0, str(e))
 
@@ -267,8 +318,8 @@ with tab2:
 
     if st.button("▶️ Run Query", key="run_analytics"):
         try:
-            df, latency_ms = run_query(sql)
-            st.caption(f"✅ Latency: {latency_ms} ms | Rows: {len(df)}")
+            df, latency_ms = run_query_cached(sql)
+            st.caption(f"✅ Executed (cached) | Rows: {len(df)}")
             st.dataframe(df, use_container_width=True, height=350)
 
             # Auto-chart
@@ -292,6 +343,7 @@ with tab2:
 
             log_event(team, user, choice, latency_ms, len(df))
         except Exception as e:
+            logger.error(f"Analytics query error: {e}", exc_info=True)
             st.error(f"Error: {e}")
             log_event(team, user, choice, 0, 0, str(e))
 
@@ -407,25 +459,29 @@ with tab6:
 
     if st.button("Retrieve Evidence"):
         try:
+            logger.info(f"Running RAG retrieval for query: {query}")
             retriever = Retriever()
             results = retriever.search(query, k=5)
 
             st.markdown("### Retrieved Chunks")
 
             for i, r in enumerate(results):
-                st.markdown(
-                    f"**Result {i+1}** | Source: `{r['source']}` | Score: `{r['score']:.2f}`"
-                )
-                st.write(r["text"])
-                st.markdown("---")
+                with st.expander(f"Result {i+1} | Source: {r['source']} | Score: {r['score']:.2f}"):
+                    st.write(r["text"])
 
-            # 👇 ADD THIS HERE
-            combined_text = " ".join([r["text"] for r in results])
+            combined_text = "\n\n".join([r["text"] for r in results])
 
-            st.markdown("### Combined Context")
-            st.write(combined_text[:1000])
+            st.markdown("### Synthesized Answer")
+            with st.spinner("Synthesizing answer with Gemini..."):
+                llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0.2)
+                sys_msg = SystemMessage(content="You are a helpful financial assistant. Synthesize an answer to the user's query using ONLY the provided retrieved context. If the context does not contain the answer, say so.")
+                user_msg = HumanMessage(content=f"Query: {query}\n\nContext:\n{combined_text}")
+                response = llm.invoke([sys_msg, user_msg])
+                st.write(response.content)
+                logger.info("RAG Synthesis complete.")
 
         except Exception as e:
+            logger.error(f"Retrieval error: {e}", exc_info=True)
             st.error(f"Retrieval error: {e}")
 
 # ────────────────── TAB 7: AGENT CHAT ──────────────────
@@ -446,24 +502,27 @@ with tab7:
             st.markdown(prompt)
             
         with st.chat_message("assistant"):
-            with st.spinner("Agent is reasoning and fetching data..."):
-                try:
-                    agent = get_agent()
-                    # Convert chat history formats for LangGraph State
-                    inputs = {"messages": st.session_state.messages}
-                    result = agent.invoke(inputs)
-                    response = result["messages"][-1].content
+            status = st.status("Agent is reasoning and fetching data...", expanded=True)
+            try:
+                logger.info(f"Agent invoked with prompt: {prompt}")
+                agent = get_agent()
+                inputs = {"messages": st.session_state.messages}
+                result = agent.invoke(inputs)
+                
+                response = result["messages"][-1].content
+                if isinstance(response, list):
+                    response = "".join(
+                        part.get("text", "") for part in response if isinstance(part, dict) and "text" in part
+                    )
                     
-                    # Gemini 2.5 returns structured content as a list of dicts. Flatten it to a string.
-                    if isinstance(response, list):
-                        response = "".join(
-                            part.get("text", "") for part in response if isinstance(part, dict) and "text" in part
-                        )
-                        
-                    st.markdown(response)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                except Exception as e:
-                    st.error(f"Agent Execution Error: {str(e)}")
+                status.update(label="Task Complete!", state="complete", expanded=False)
+                st.markdown(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
+                logger.info("Agent execution successful.")
+            except Exception as e:
+                logger.error(f"Agent Execution Error: {e}", exc_info=True)
+                status.update(label="Agent Error", state="error", expanded=False)
+                st.error(f"Agent Execution Error: {str(e)}")
 
 # ────────────────── TAB 8: DOMAIN EVALUATION ──────────────────
 with tab8:
@@ -482,18 +541,81 @@ with tab8:
             st.markdown("### 🤖 Baseline (Generic)")
             with st.spinner("Running Baseline Agent..."):
                 try:
+                    logger.info("Running Baseline Eval Agent")
                     baseline_agent = get_agent(adapted=False)
                     base_res = baseline_agent.invoke({"messages": [("user", eval_query)]})
-                    st.info(base_res["messages"][-1].content)
+                    
+                    base_out = base_res["messages"][-1].content
+                    if isinstance(base_out, list):
+                        base_out = "".join(p.get("text", "") for p in base_out if isinstance(p, dict))
+                        
+                    st.info(base_out)
                 except Exception as e:
+                    logger.error(f"Baseline Eval Error: {e}", exc_info=True)
                     st.error(f"Error: {e}")
                     
         with col2:
             st.markdown("### 🎓 Adapted (Domain Expert)")
             with st.spinner("Running Adapted Agent..."):
                 try:
+                    logger.info("Running Adapted Eval Agent")
                     adapted_agent = get_agent(adapted=True)
                     adapt_res = adapted_agent.invoke({"messages": [("user", eval_query)]})
-                    st.success(adapt_res["messages"][-1].content)
+                    
+                    adapt_out = adapt_res["messages"][-1].content
+                    if isinstance(adapt_out, list):
+                        adapt_out = "".join(p.get("text", "") for p in adapt_out if isinstance(p, dict))
+                        
+                    st.success(adapt_out)
                 except Exception as e:
+                    logger.error(f"Adapted Eval Error: {e}", exc_info=True)
                     st.error(f"Error: {e}")
+
+# ────────────────── TAB 9: APP METRICS ──────────────────
+with tab9:
+    st.subheader("System Evaluation & Monitoring")
+    st.write("Monitor system stability, query volumes, and latencies across users and teams.")
+    
+    if st.button("Load Metrics Dashboard"):
+        if os.path.exists(LOG_PATH):
+            try:
+                metrics_df = pd.read_csv(LOG_PATH)
+                metrics_df['timestamp'] = pd.to_datetime(metrics_df['timestamp'])
+                
+                st.metric(label="Total Queries Executed", value=len(metrics_df))
+                
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.markdown("**Average Latency by Query Name**")
+                    avg_latency = metrics_df.groupby('query_name')['latency_ms'].mean().reset_index()
+                    chart = alt.Chart(avg_latency).mark_bar().encode(
+                        x=alt.X('query_name:N', sort='-y', title="Query Type"),
+                        y=alt.Y('latency_ms:Q', title="Avg Latency (ms)"),
+                        color=alt.Color('query_name:N', legend=None),
+                        tooltip=['query_name', 'latency_ms']
+                    ).properties(height=300)
+                    st.altair_chart(chart, use_container_width=True)
+                
+                with col_b:
+                    st.markdown("**Query Execution Volume by Team**")
+                    vol_team = metrics_df.groupby('team').size().reset_index(name='count')
+                    chart2 = alt.Chart(vol_team).mark_arc().encode(
+                        theta=alt.Theta(field="count", type="quantitative"),
+                        color=alt.Color(field="team", type="nominal"),
+                        tooltip=['team', 'count']
+                    ).properties(height=300)
+                    st.altair_chart(chart2, use_container_width=True)
+                    
+                st.markdown("**Error Logs Summary**")
+                errors_df = metrics_df[metrics_df['error'].notna() & (metrics_df['error'] != "")]
+                if not errors_df.empty:
+                    st.warning(f"Found {len(errors_df)} errors in the logs.")
+                    st.dataframe(errors_df[['timestamp', 'team', 'user', 'query_name', 'error']].tail(20), use_container_width=True)
+                else:
+                    st.success("No errors found in the logs!")
+                    
+            except Exception as e:
+                logger.error(f"Error loading metrics: {e}", exc_info=True)
+                st.error(f"Failed to generate custom metrics dashboard: {e}")
+        else:
+            st.info("No logs generated yet. Use the other tabs to generate logs.")
